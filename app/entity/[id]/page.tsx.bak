@@ -1,0 +1,575 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { ArrowLeft, Star, Heart, Phone, MessageCircle, MapPin, ExternalLink, Instagram } from 'lucide-react';
+import { Entity, Comment, defaultComments } from '@/data/db';
+import LazyImage from '@/components/LazyImage';
+import Toast from '@/components/Toast';
+
+export default function EntityDetailPage() {
+  const params = useParams();
+  const router = useRouter();
+  const entityId = params.id as string;
+
+  const [entity, setEntity] = useState<Entity | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [userRating, setUserRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [showCommentForm, setShowCommentForm] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [authorName, setAuthorName] = useState('');
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+
+  useEffect(() => {
+    loadEntity();
+    loadFavoriteStatus();
+    loadUserRating();
+    loadComments();
+  }, [entityId]);
+
+  const loadEntity = async () => {
+    try {
+      const response = await fetch(`/api/entities`);
+      const data = await response.json();
+      const found = data.entities.find((e: Entity) => e.id === entityId);
+      setEntity(found || null);
+    } catch (error) {
+      console.error('Failed to load entity:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadFavoriteStatus = () => {
+    const favorites = JSON.parse(localStorage.getItem('bali-explorer-favorites') || '[]');
+    setIsFavorite(favorites.includes(entityId));
+  };
+
+  const loadUserRating = () => {
+    const ratings = JSON.parse(localStorage.getItem('bali-explorer-ratings') || '{}');
+    setUserRating(ratings[entityId] || 0);
+  };
+
+  const loadComments = () => {
+    // Load comments from localStorage
+    const stored = JSON.parse(localStorage.getItem('bali-explorer-comments') || '{}');
+    const entityComments = stored[entityId] || [];
+    
+    // Load default comment for this entity
+    const defaultComment = defaultComments.find(c => c.entity_id === entityId);
+    
+    // Combine: user comments + default comment, sorted by date (newest first)
+    const allComments = defaultComment 
+      ? [...entityComments, defaultComment]
+      : entityComments;
+    
+    allComments.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    setComments(allComments);
+  };
+
+  const toggleFavorite = () => {
+    const favorites = JSON.parse(localStorage.getItem('bali-explorer-favorites') || '[]');
+    
+    if (favorites.includes(entityId)) {
+      const updated = favorites.filter((id: string) => id !== entityId);
+      localStorage.setItem('bali-explorer-favorites', JSON.stringify(updated));
+      setIsFavorite(false);
+    } else {
+      favorites.push(entityId);
+      localStorage.setItem('bali-explorer-favorites', JSON.stringify(favorites));
+      setIsFavorite(true);
+    }
+  };
+
+  const submitRating = (rating: number) => {
+    setUserRating(rating);
+    setShowCommentForm(true); // Show comment form after rating
+  };
+
+  const submitComment = () => {
+    if (!userRating) {
+      alert('Пожалуйста, поставьте оценку перед отправкой комментария');
+      return;
+    }
+
+    // Check if user already commented
+    const myComments = JSON.parse(localStorage.getItem('bali-my-comments') || '[]');
+    const alreadyCommented = comments.some(c => myComments.includes(c.id));
+    
+    if (alreadyCommented) {
+      setToastMessage('Вы уже оставляли отзыв на это место');
+      setShowToast(true);
+      return;
+    }
+
+    // Validate comment length
+    if (commentText.trim() && commentText.trim().length < 10) {
+      alert('Комментарий должен быть не менее 10 символов');
+      return;
+    }
+
+    if (commentText.trim().length > 500) {
+      alert('Комментарий не должен превышать 500 символов');
+      return;
+    }
+
+    // Create new comment
+    const newComment: Comment = {
+      id: `comment-${Date.now()}`,
+      entity_id: entityId,
+      rating: userRating,
+      text: commentText.trim() || '',
+      author: authorName.trim() || 'Аноним',
+      created_at: new Date().toISOString(),
+    };
+
+    // Save to localStorage
+    const stored = JSON.parse(localStorage.getItem('bali-explorer-comments') || '{}');
+    if (!stored[entityId]) {
+      stored[entityId] = [];
+    }
+    stored[entityId].push(newComment);
+    localStorage.setItem('bali-explorer-comments', JSON.stringify(stored));
+
+    // Save my comment ID
+    myComments.push(newComment.id);
+    localStorage.setItem('bali-my-comments', JSON.stringify(myComments));
+
+    // Save rating
+    const ratings = JSON.parse(localStorage.getItem('bali-explorer-ratings') || '{}');
+    ratings[entityId] = userRating;
+    localStorage.setItem('bali-explorer-ratings', JSON.stringify(ratings));
+
+    // Reset form
+    setCommentText('');
+    setAuthorName('');
+    setShowCommentForm(false);
+
+    // Reload comments
+    loadComments();
+
+    // Show success toast
+    setToastMessage('✅ Спасибо! Ваш отзыв добавлен');
+    setShowToast(true);
+  };
+
+  const skipComment = () => {
+    // Just save rating without comment
+    const ratings = JSON.parse(localStorage.getItem('bali-explorer-ratings') || '{}');
+    ratings[entityId] = userRating;
+    localStorage.setItem('bali-explorer-ratings', JSON.stringify(ratings));
+
+    setShowCommentForm(false);
+    
+    setToastMessage(`Спасибо! Вы поставили ${userRating} ${userRating === 1 ? 'звезду' : userRating < 5 ? 'звезды' : 'звезд'}`);
+    setShowToast(true);
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) return 'Сегодня';
+    if (diffDays === 1) return 'Вчера';
+    if (diffDays < 7) return `${diffDays} дн. назад`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} нед. назад`;
+    return `${Math.floor(diffDays / 30)} мес. назад`;
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-gray-500">Загрузка...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!entity) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Не найдено</h2>
+          <button
+            onClick={() => router.back()}
+            className="text-primary hover:underline"
+          >
+            Вернуться назад
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 pb-20">
+      <Toast message={toastMessage} show={showToast} onClose={() => setShowToast(false)} />
+
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-40">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => router.back()}
+              className="p-2 hover:bg-gray-100 rounded-xl transition-colors"
+            >
+              <ArrowLeft size={24} />
+            </button>
+            
+            <button
+              onClick={toggleFavorite}
+              className={`p-3 rounded-full transition-all ${
+                isFavorite ? 'bg-red-50' : 'bg-gray-100'
+              }`}
+            >
+              <Heart
+                size={24}
+                className={isFavorite ? 'fill-red-500 text-red-500' : 'text-gray-600'}
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-4xl mx-auto px-4 py-6">
+        {/* Image */}
+        {entity.image_url && (
+          <div className="mb-6 rounded-2xl overflow-hidden">
+            <LazyImage
+              src={entity.image_url}
+              alt={entity.title}
+              aspectRatio="16/9"
+            />
+          </div>
+        )}
+
+        {/* Title & Area */}
+        <div className="mb-6">
+          <h1 className="text-3xl font-display font-bold text-gray-900 mb-2">
+            {entity.title}
+          </h1>
+          <div className="flex items-center gap-3 text-gray-600">
+            <span>{entity.area}</span>
+            <span>•</span>
+            <span className="text-primary font-bold">
+              {'$'.repeat(entity.price_level)}
+            </span>
+          </div>
+        </div>
+
+        {/* Rating Section */}
+        <div className="bg-white rounded-2xl p-6 shadow-card mb-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Рейтинг и отзывы</h2>
+          
+          {/* Current Rating */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex items-center gap-1">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Star
+                  key={star}
+                  size={20}
+                  className={
+                    star <= Math.floor(entity.rating)
+                      ? 'fill-yellow-400 text-yellow-400'
+                      : 'text-gray-300'
+                  }
+                />
+              ))}
+            </div>
+            <span className="text-xl font-bold text-gray-900">
+              {entity.rating.toFixed(1)}
+            </span>
+            <span className="text-gray-500">
+              ({comments.length} {comments.length === 1 ? 'отзыв' : comments.length < 5 ? 'отзыва' : 'отзывов'})
+            </span>
+          </div>
+
+          {/* User Rating */}
+          {!showCommentForm && (
+            <div className="pt-4 border-t border-gray-200">
+              <p className="text-sm font-medium text-gray-700 mb-3">
+                {userRating > 0 ? 'Ваша оценка:' : 'Оцените это место:'}
+              </p>
+              <div className="flex items-center gap-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => submitRating(star)}
+                    onMouseEnter={() => setHoverRating(star)}
+                    onMouseLeave={() => setHoverRating(0)}
+                    className="transition-transform hover:scale-110"
+                  >
+                    <Star
+                      size={32}
+                      className={
+                        star <= (hoverRating || userRating)
+                          ? 'fill-yellow-400 text-yellow-400'
+                          : 'text-gray-300'
+                      }
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Comment Form (appears after rating) */}
+          {showCommentForm && (
+            <div className="pt-4 border-t border-gray-200">
+              <p className="text-sm font-medium text-gray-700 mb-3">
+                Вы поставили {userRating} {userRating === 1 ? 'звезду' : userRating < 5 ? 'звезды' : 'звезд'}. Хотите добавить отзыв?
+              </p>
+              
+              <input
+                type="text"
+                value={authorName}
+                onChange={(e) => setAuthorName(e.target.value)}
+                placeholder="Ваше имя (опционально)"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary mb-3"
+                maxLength={50}
+              />
+
+              <textarea
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Ваш отзыв (опционально, 10-500 символов)"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary mb-4 resize-none"
+                rows={4}
+                maxLength={500}
+              />
+
+              <div className="flex gap-3">
+                <button
+                  onClick={submitComment}
+                  className="flex-1 bg-primary text-white py-3 rounded-xl font-medium hover:bg-primary/90 transition-colors"
+                >
+                  Отправить отзыв
+                </button>
+                <button
+                  onClick={skipComment}
+                  className="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors"
+                >
+                  Пропустить
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Comments List */}
+        {comments.length > 0 && (
+          <div className="bg-white rounded-2xl p-6 shadow-card mb-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">
+              💬 Отзывы ({comments.length})
+            </h2>
+            
+            <div className="space-y-4">
+              {comments.map((comment) => (
+                <div key={comment.id} className="border-b border-gray-200 last:border-0 pb-4 last:pb-0">
+                  {/* Rating stars */}
+                  <div className="flex items-center gap-1 mb-2">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        size={16}
+                        className={
+                          star <= comment.rating
+                            ? 'fill-yellow-400 text-yellow-400'
+                            : 'text-gray-300'
+                        }
+                      />
+                    ))}
+                  </div>
+                  
+                  {/* Comment text */}
+                  {comment.text && (
+                    <p className="text-gray-700 mb-2 leading-relaxed">
+                      {comment.text}
+                    </p>
+                  )}
+                  
+                  {/* Author and date */}
+                  <p className="text-sm text-gray-500">
+                    {comment.author} • {formatDate(comment.created_at)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {comments.length === 0 && (
+          <div className="bg-white rounded-2xl p-8 shadow-card mb-6 text-center">
+            <p className="text-2xl mb-2">💬</p>
+            <p className="text-gray-600 font-medium mb-1">Отзывов пока нет</p>
+            <p className="text-gray-500 text-sm">Будьте первым, кто оставит отзыв!</p>
+          </div>
+        )}
+
+        {/* Description */}
+        <div className="bg-white rounded-2xl p-6 shadow-card mb-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-3">Описание</h2>
+          <p className="text-gray-700 leading-relaxed">
+            {entity.short_description}
+          </p>
+        </div>
+
+        {/* Contacts */}
+        <div className="bg-white rounded-2xl p-6 shadow-card mb-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">Контакты</h2>
+          
+          <div className="space-y-3">
+            {entity.contacts.phone && (
+              <a
+                href={`tel:${entity.contacts.phone.replace(/[^0-9+]/g, '')}`}
+                className="flex items-center gap-3 p-4 bg-blue-50 rounded-xl hover:bg-blue-100 transition-colors"
+              >
+                <Phone size={20} className="text-blue-600" />
+                <span className="font-medium text-blue-900">
+                  {entity.contacts.phone}
+                </span>
+              </a>
+            )}
+
+            {entity.contacts.whatsapp && (
+              <a
+                href={`https://wa.me/${entity.contacts.whatsapp.replace(/[^0-9]/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-4 bg-green-50 rounded-xl hover:bg-green-100 transition-colors"
+              >
+                <MessageCircle size={20} className="text-green-600" />
+                <span className="font-medium text-green-900">WhatsApp</span>
+              </a>
+            )}
+
+            {entity.contacts.instagram && (
+              <a
+                href={`https://instagram.com/${entity.contacts.instagram.replace('@', '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-4 bg-pink-50 rounded-xl hover:bg-pink-100 transition-colors"
+              >
+                <Instagram size={20} className="text-pink-600" />
+                <span className="font-medium text-pink-900">
+                  {entity.contacts.instagram}
+                </span>
+              </a>
+            )}
+
+            {entity.contacts.website && (
+              <a
+                href={entity.contacts.website}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"
+              >
+                <ExternalLink size={20} className="text-gray-600" />
+                <span className="font-medium text-gray-900">Сайт</span>
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Working Hours */}
+        {entity.work_hours && (
+          <div className="bg-white rounded-2xl p-6 shadow-card mb-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Часы работы</h2>
+            
+            <div className="space-y-2">
+              {entity.work_hours.monday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Понедельник</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.monday.closed ? 'Выходной' : `${entity.work_hours.monday.open} - ${entity.work_hours.monday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.tuesday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Вторник</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.tuesday.closed ? 'Выходной' : `${entity.work_hours.tuesday.open} - ${entity.work_hours.tuesday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.wednesday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Среда</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.wednesday.closed ? 'Выходной' : `${entity.work_hours.wednesday.open} - ${entity.work_hours.wednesday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.thursday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Четверг</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.thursday.closed ? 'Выходной' : `${entity.work_hours.thursday.open} - ${entity.work_hours.thursday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.friday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Пятница</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.friday.closed ? 'Выходной' : `${entity.work_hours.friday.open} - ${entity.work_hours.friday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.saturday && (
+                <div className="flex justify-between items-center py-2 border-b border-gray-100">
+                  <span className="text-gray-600">Суббота</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.saturday.closed ? 'Выходной' : `${entity.work_hours.saturday.open} - ${entity.work_hours.saturday.close}`}
+                  </span>
+                </div>
+              )}
+              {entity.work_hours.sunday && (
+                <div className="flex justify-between items-center py-2">
+                  <span className="text-gray-600">Воскресенье</span>
+                  <span className="font-medium text-gray-900">
+                    {entity.work_hours.sunday.closed ? 'Выходной' : `${entity.work_hours.sunday.open} - ${entity.work_hours.sunday.close}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Location */}
+        {((entity.geo_lat && entity.geo_lng) || entity.address_text) && (
+          <div className="bg-white rounded-2xl p-6 shadow-card">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Локация</h2>
+            
+            {entity.address_text && (
+              <p className="text-gray-700 mb-4">{entity.address_text}</p>
+            )}
+
+            {entity.geo_lat && entity.geo_lng && (
+              <a
+                href={`https://www.google.com/maps?q=${entity.geo_lat},${entity.geo_lng}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3 p-4 bg-primary/10 rounded-xl hover:bg-primary/20 transition-colors"
+              >
+                <MapPin size={20} className="text-primary" />
+                <span className="font-medium text-primary">Открыть на карте</span>
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
